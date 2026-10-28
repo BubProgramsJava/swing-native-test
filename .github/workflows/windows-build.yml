@@ -1,0 +1,62 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          components: 'native-image'
+          cache: 'maven'
+
+      - name: Build executable and runnable JAR
+        run: mvn --batch-mode --no-transfer-progress -Pnative clean package
+
+      - name: Verify JAR entry point
+        shell: pwsh
+        run: |
+          $jar = 'target/Test-1.0-SNAPSHOT.jar'
+          if (-not (Test-Path $jar)) { throw "Missing $jar" }
+          $entries = & jar.exe --list --file $jar
+          if ($entries -notcontains 'se/hirt/bubb/Main.class') { throw 'Main class is missing from JAR' }
+          New-Item -ItemType Directory -Force target/jar-check | Out-Null
+          & jar.exe --extract --file $jar --dir target/jar-check META-INF/MANIFEST.MF
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract JAR manifest' }
+          $manifest = Get-Content target/jar-check/META-INF/MANIFEST.MF -Raw
+          if ($manifest -notmatch '(?m)^Main-Class: se\.hirt\.bubb\.Main\r?$') { throw 'JAR manifest has no runnable Main-Class' }
+          $process = Start-Process java.exe -ArgumentList @('-jar', (Resolve-Path $jar).Path) -PassThru
+          Start-Sleep -Seconds 5
+          $process.Refresh()
+          if ($process.HasExited) { throw "java -jar exited during startup with code $($process.ExitCode)" }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Build Windows MSI installer
+        shell: pwsh
+        run: |
+          choco install wixtoolset --version=3.14.1 --no-progress --yes
+          $env:PATH = "$env:PATH;${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          New-Item -ItemType Directory -Force target/jpackage-input | Out-Null
+          Copy-Item target/Test-1.0-SNAPSHOT.jar target/jpackage-input/
+          jpackage.exe --type msi --name Test --app-version 1.0.0 --input target/jpackage-input --main-jar Test-1.0-SNAPSHOT.jar --main-class se.hirt.bubb.Main --dest target/installer --win-menu --win-shortcut
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          if-no-files-found: error
+          path: |
+            target/Test-1.0-SNAPSHOT.jar
+            target/Test.exe
+            target/installer/*.msi
