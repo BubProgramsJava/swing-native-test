@@ -86,4 +86,4 @@ jobs:
           files: |
             release-assets/Test-0.1.0-SNAPSHOT.jar
             release-assets/Test.exe
-            release-assets/*.msi
+            release-assets/installer/*.msi
